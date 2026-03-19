@@ -497,6 +497,14 @@ select:focus { border-color: var(--dusty-rose); }
   " onmouseover="this.style.background='rgba(200,168,130,0.15)'" onmouseout="this.style.background='transparent'">
     📅 履歴
   </button>
+  <button onclick="doLogout()" style="
+    margin-left:8px;padding:6px 14px;border:1px solid rgba(200,168,130,0.4);
+    background:transparent;color:var(--light-gold);border-radius:14px;
+    font-size:11px;font-family:inherit;cursor:pointer;letter-spacing:0.05em;
+    transition:all 0.2s;white-space:nowrap;
+  " onmouseover="this.style.background='rgba(200,168,130,0.15)'" onmouseout="this.style.background='transparent'">
+    🔓 ログアウト
+  </button>
 </nav>
 
 <!-- ======== PAGE 1: RPP全体 ======== -->
@@ -5457,8 +5465,11 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// ---- ログイン処理 ----
-async function doLogin() {
+function doLogout() {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(TOKEN_TS_KEY);
+  location.reload();
+}
   const pw  = document.getElementById('login-password').value;
   const err = document.getElementById('login-error');
   if (!pw) { err.textContent = 'パスワードを入力してください'; return; }
