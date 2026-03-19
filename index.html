@@ -431,6 +431,31 @@ select:focus { border-color: var(--dusty-rose); }
     <div id="history-list" style="font-size:12px;color:var(--mauve)">読込中...</div>
   </div>
 
+  <!-- 過去CSV一括投入 -->
+  <div style="width:420px;max-width:90vw">
+    <button onclick="togglePastUpload()" style="
+      width:100%;padding:8px 22px;border:1px dashed var(--border);border-radius:10px;
+      background:transparent;color:var(--mauve);font-size:12px;font-family:inherit;
+      cursor:pointer;letter-spacing:0.05em;transition:all 0.2s;text-align:center;
+    ">📥 過去データをまとめて登録する</button>
+    <div id="past-upload-panel" style="display:none;margin-top:12px;background:#fff;border-radius:12px;padding:20px;border:1px solid var(--border);box-shadow:var(--shadow)">
+      <div style="font-size:13px;font-weight:700;color:var(--plum);margin-bottom:8px">過去CSVを一括登録</div>
+      <div style="font-size:11px;color:var(--mauve);margin-bottom:12px">複数のCSVファイルを選択すると、それぞれ自動で日付を検出して保存します</div>
+      <label style="
+        display:block;border:2px dashed var(--blush);border-radius:10px;
+        padding:20px;text-align:center;cursor:pointer;transition:all 0.2s;
+        background:var(--pale-blush);position:relative;
+      " ondragover="event.preventDefault();this.style.borderColor='var(--dusty-rose)'"
+         ondragleave="this.style.borderColor='var(--blush)'"
+         ondrop="handlePastDrop(event)">
+        <input type="file" accept=".csv" multiple style="position:absolute;inset:0;opacity:0;cursor:pointer" onchange="handlePastFiles(event)">
+        <div style="font-size:24px;margin-bottom:8px">📂</div>
+        <div style="font-size:12px;font-weight:600;color:var(--plum)">複数CSVをドロップ または クリックして選択</div>
+      </label>
+      <div id="past-upload-status" style="margin-top:12px;font-size:12px;display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+  </div>
+
   <!-- すでにデータがある場合のボタン -->
   <button id="use-existing-btn" style="
     display:none;
@@ -5454,18 +5479,16 @@ async function doLogin() {
   }
 }
 
-// ---- GAS通信 ----
+// ---- GAS通信（CORS対応） ----
 async function gasPost(data) {
   const token = localStorage.getItem(TOKEN_KEY);
   if (token && data.action !== 'login') data.token = token;
   const res = await fetch(GAS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain' },
-    body: JSON.stringify(data),
-    mode: 'no-cors' // GASはno-corsで送信
+    body: JSON.stringify(data)
   });
-  // no-corsはレスポンスボディが読めないのでGETで取得
-  return { ok: true };
+  return res.json();
 }
 
 async function gasGet(params) {
@@ -5476,10 +5499,8 @@ async function gasGet(params) {
 }
 
 // ---- CSVアップロード後にGASへ保存 ----
-// 既存のshowDashboard関数をオーバーライド（直接上書き）
 function showDashboard() {
   document.getElementById('upload-overlay').style.display = 'none';
-  // GASへデータを非同期保存
   saveCurrentDataToGAS();
 }
 
@@ -5488,43 +5509,29 @@ async function saveCurrentDataToGAS() {
   try {
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) return;
-
-    // 集計日付を取得
     const dateLabel = getCurrentDateLabel();
-
-    // CSVデータをJSON化して送信
-    const payload = JSON.stringify({
-      action: 'uploadCSV',
+    const res = await gasPost({
+      action: 'saveData',
       token,
       dateLabel,
-      csvData: JSON.stringify(window.DATA) // DATAオブジェクトをJSONで保存
+      jsonData: JSON.stringify(window.DATA)
     });
-
-    // GASはno-corsのためfetchで送るのみ（レスポンス確認不可）
-    await fetch(GAS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: payload,
-      mode: 'no-cors'
-    });
-
-    // ナビに保存済み表示
-    showSaveBadge(dateLabel);
-    console.log('GASへ保存送信完了:', dateLabel);
+    if (res.ok) {
+      showSaveBadge(dateLabel);
+      console.log('GAS保存完了:', dateLabel);
+    } else {
+      console.warn('GAS保存失敗:', res.error);
+    }
   } catch(e) {
-    console.warn('GAS保存失敗（オフラインモード）:', e);
+    console.warn('GAS接続失敗（オフラインモード）:', e);
   }
 }
 
 function getCurrentDateLabel() {
-  // DATA.rpp_dailyの最新日付を取得
   if (window.DATA?.rpp_daily?.length) {
     const dates = DATA.rpp_daily.map(d => d['日付']).filter(Boolean).sort();
     const last  = dates[dates.length - 1];
-    if (last) {
-      // "2026年03月17日" → "2026-03-17"
-      return last.replace('年','-').replace('月','-').replace('日','');
-    }
+    if (last) return last.replace('年','-').replace('月','-').replace('日','');
   }
   return new Date().toISOString().slice(0,10);
 }
@@ -5567,29 +5574,59 @@ async function showHistoryPanel() {
 // ---- 履歴モーダル（ナビから） ----
 async function showHistoryModal() {
   const modal = document.getElementById('history-modal');
-  const list  = document.getElementById('history-modal-list');
   modal.style.display = 'flex';
-  list.innerHTML = '<div style="color:var(--mauve);font-size:12px">読込中...</div>';
+  await refreshHistoryList();
+}
+
+async function refreshHistoryList() {
+  const list = document.getElementById('history-modal-list');
+  list.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:var(--mauve);font-size:12px;padding:8px">
+    <div style="width:14px;height:14px;border:2px solid var(--blush);border-top-color:var(--dusty-rose);border-radius:50%;animation:spin 0.8s linear infinite"></div>
+    読込中...
+  </div>`;
   try {
     const res = await gasGet({ action: 'listDates' });
     if (res.ok && res.dates?.length) {
       list.innerHTML = res.dates.map(d => `
-        <div onclick="loadHistoryDate('${d}');closeHistoryModal();" style="
+        <div style="
           padding:12px 16px;border-radius:10px;border:1px solid var(--border);
-          cursor:pointer;display:flex;align-items:center;gap:10px;
-          transition:all 0.15s;background:#fff;
+          display:flex;align-items:center;justify-content:space-between;gap:8px;
+          background:#fff;transition:all 0.15s;
         " onmouseover="this.style.background='var(--pale-blush)'" onmouseout="this.style.background='#fff'">
-          <span style="font-size:18px">📅</span>
-          <div>
-            <div style="font-size:13px;font-weight:700;color:var(--plum)">${d}</div>
-            <div style="font-size:11px;color:var(--mauve)">クリックして読み込む</div>
+          <div onclick="loadHistoryDate('${d.date}');closeHistoryModal();" style="cursor:pointer;flex:1">
+            <div style="font-size:13px;font-weight:700;color:var(--plum)">📅 ${d.date}</div>
+            <div style="font-size:10px;color:var(--mauve);margin-top:2px">保存日時: ${d.savedAt ? d.savedAt.slice(0,16).replace('T',' ') : '—'}</div>
           </div>
+          <button onclick="deleteHistoryDate('${d.date}')" style="
+            padding:4px 10px;background:rgba(201,137,122,0.15);color:#8b3a2a;
+            border:1px solid rgba(201,137,122,0.3);border-radius:8px;
+            font-size:11px;font-family:inherit;font-weight:600;cursor:pointer;
+            white-space:nowrap;transition:all 0.15s;flex-shrink:0
+          " onmouseover="this.style.background='rgba(201,137,122,0.3)'" onmouseout="this.style.background='rgba(201,137,122,0.15)'">
+            🗑 削除
+          </button>
         </div>`).join('');
     } else {
-      list.innerHTML = '<div style="color:var(--mauve);font-size:12px;padding:12px">まだデータが保存されていません。<br>CSVをアップロードすると自動的に保存されます。</div>';
+      list.innerHTML = `<div style="color:var(--mauve);font-size:12px;padding:16px;text-align:center;opacity:0.7">
+        まだデータが保存されていません。<br>CSVをアップロードすると自動的に保存されます。
+      </div>`;
     }
   } catch(e) {
-    list.innerHTML = '<div style="color:#c94a4a;font-size:12px;padding:12px">GASに接続できません。インターネット接続を確認してください。</div>';
+    list.innerHTML = `<div style="color:#c94a4a;font-size:12px;padding:12px">GASに接続できません。<br>${e.message}</div>`;
+  }
+}
+
+async function deleteHistoryDate(dateLabel) {
+  if (!confirm(`「${dateLabel}」のデータを削除しますか？`)) return;
+  try {
+    const res = await gasPost({ action: 'deleteData', dateLabel });
+    if (res.ok) {
+      await refreshHistoryList();
+    } else {
+      alert('削除失敗: ' + res.error);
+    }
+  } catch(e) {
+    alert('エラー: ' + e.message);
   }
 }
 
@@ -5602,23 +5639,74 @@ async function loadHistoryDate(dateLabel) {
   const status = document.getElementById('upload-status');
   if (status) { status.textContent = `${dateLabel} のデータを読込中...`; status.style.color = 'var(--mauve)'; }
   try {
-    const token = localStorage.getItem(TOKEN_KEY);
-    const res   = await gasGet({ action: 'getData', date: dateLabel, token });
-    if (res.ok && res.data) {
-      // 保存したDATAオブジェクトを復元
-      window.DATA = JSON.parse(res.data[0][0]);
+    const res = await gasGet({ action: 'getData', date: dateLabel });
+    if (res.ok && res.jsonData) {
+      window.DATA = JSON.parse(res.jsonData);
       buildAllPages();
-      showDashboardDirect();
+      document.getElementById('upload-overlay').style.display = 'none';
       const nav = document.querySelector('.nav-date');
       if (nav) nav.textContent = `📅 ${dateLabel}（履歴）`;
     } else {
-      if (status) { status.textContent = 'データの読み込みに失敗しました'; status.style.color = '#c94a4a'; }
+      if (status) { status.textContent = 'データの読み込みに失敗しました: ' + (res.error || ''); status.style.color = '#c94a4a'; }
     }
   } catch(e) {
     if (status) { status.textContent = `エラー: ${e.message}`; status.style.color = '#c94a4a'; }
   }
 }
 
+function togglePastUpload() {
+  const panel = document.getElementById('past-upload-panel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+
+function handlePastDrop(e) {
+  e.preventDefault();
+  e.currentTarget.style.borderColor = 'var(--blush)';
+  handlePastFiles({ target: { files: e.dataTransfer.files } });
+}
+
+async function handlePastFiles(event) {
+  const files = Array.from(event.target.files);
+  if (!files.length) return;
+  const statusEl = document.getElementById('past-upload-status');
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) { statusEl.innerHTML = '<div style="color:#c94a4a">ログインが必要です</div>'; return; }
+
+  for (const file of files) {
+    const rowEl = document.createElement('div');
+    rowEl.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;background:var(--pale-blush);font-size:11px';
+    rowEl.innerHTML = `<div style="width:12px;height:12px;border:2px solid var(--blush);border-top-color:var(--dusty-rose);border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0"></div>
+      <span style="color:var(--mauve)">${file.name} — 処理中...</span>`;
+    statusEl.appendChild(rowEl);
+
+    try {
+      const text = await file.text();
+      // CSVをパースしてDATAオブジェクトを作成
+      const tempData = loadCSVData(text);
+      if (!tempData) throw new Error('CSVのパースに失敗');
+
+      // 日付ラベルを自動検出
+      let dateLabel = '';
+      if (tempData.rpp_daily?.length) {
+        const dates = tempData.rpp_daily.map(d => d['日付']).filter(Boolean).sort();
+        const last  = dates[dates.length - 1];
+        if (last) dateLabel = last.replace('年','-').replace('月','-').replace('日','');
+      }
+      if (!dateLabel) dateLabel = file.name.match(/\d{8}|\d{4}-\d{2}-\d{2}/)?.[0]?.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') || new Date().toISOString().slice(0,10);
+
+      const res = await gasPost({ action: 'saveData', token, dateLabel, jsonData: JSON.stringify(tempData) });
+      if (res.ok) {
+        rowEl.innerHTML = `<span style="color:#4a6b44;font-weight:700">✅</span><span style="color:#4a6b44">${file.name} → <strong>${dateLabel}</strong> で保存完了</span>`;
+      } else {
+        throw new Error(res.error || '保存失敗');
+      }
+    } catch(e) {
+      rowEl.innerHTML = `<span style="color:#c94a4a;font-weight:700">❌</span><span style="color:#c94a4a">${file.name} — ${e.message}</span>`;
+    }
+  }
+}
+
+// ---- buildAllPages ----
 function buildAllPages() {
   try { buildPage1(); } catch(e) { console.warn('p1:', e); }
   try { buildPage2(); } catch(e) { console.warn('p2:', e); }
@@ -5626,10 +5714,6 @@ function buildAllPages() {
   try { buildPage5(); } catch(e) { console.warn('p5:', e); }
   try { buildPage6(); } catch(e) { console.warn('p6:', e); }
   try { buildPage7(); } catch(e) { console.warn('p7:', e); }
-}
-
-function showDashboardDirect() {
-  document.getElementById('upload-overlay').style.display = 'none';
 }
 
 // モーダル外クリックで閉じる
