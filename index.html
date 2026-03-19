@@ -5470,6 +5470,27 @@ function doLogout() {
   localStorage.removeItem(TOKEN_TS_KEY);
   location.reload();
 }
+
+// ---- ログイン処理 ----
+async function doLogin() {
+  const pw  = document.getElementById('login-password').value;
+  const err = document.getElementById('login-error');
+  if (!pw) { err.textContent = 'パスワードを入力してください'; return; }
+  err.textContent = '確認中...';
+  try {
+    const res = await gasPost({ action: 'login', password: pw });
+    if (res.ok) {
+      localStorage.setItem(TOKEN_KEY, res.token);
+      localStorage.setItem(TOKEN_TS_KEY, Date.now().toString());
+      document.getElementById('login-overlay').style.display = 'none';
+    } else {
+      err.textContent = res.error || 'ログインに失敗しました';
+    }
+  } catch(e) {
+    console.warn('GAS接続失敗、オフラインモードで動作:', e);
+    document.getElementById('login-overlay').style.display = 'none';
+  }
+}
   const pw  = document.getElementById('login-password').value;
   const err = document.getElementById('login-error');
   if (!pw) { err.textContent = 'パスワードを入力してください'; return; }
