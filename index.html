@@ -1295,10 +1295,6 @@ function finishLoading(file) {
   setTimeout(() => showDashboard(), 600);
 }
 
-function showDashboard() {
-  document.getElementById('upload-overlay').style.display = 'none';
-}
-
 function resetToUpload() {
   document.getElementById('upload-overlay').style.display = 'flex';
   document.getElementById('upload-status').textContent = '';
